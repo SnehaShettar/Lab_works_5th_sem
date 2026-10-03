@@ -181,12 +181,12 @@ The laboratory manual specifies the Sysbench CPU workload and the performance va
 | CPU Allocation | 2 vCPU |
 | Memory Allocation | 2 GB |
 | Disk Allocation | 20 GB |
-| Total Execution Time | **[ENTER ACTUAL VALUE]** |
-| Total Events | **[ENTER ACTUAL VALUE]** |
-| Events per Second | **[ENTER ACTUAL VALUE]** |
-| Minimum Latency | **[ENTER ACTUAL VALUE]** |
-| Average Latency | **[ENTER ACTUAL VALUE]** |
-| Maximum Latency | **[ENTER ACTUAL VALUE]** |
+| Total Execution Time | **10.0004s** |
+| Total Events | **17257** |
+| Events per Second | **1725.49** |
+| Minimum Latency | **0.57ms** |
+| Average Latency | **0.58ms** |
+| Maximum Latency | **1.68ms** |
 
 ---
 
@@ -197,8 +197,6 @@ The laboratory manual specifies the Sysbench CPU workload and the performance va
 **Oracle VirtualBox**
 
 The Type-2 experiment documented in this repository was performed using Oracle VirtualBox.
-
-> **Note:** The supplied laboratory manual describes VMware Workstation as its Type-2 example, while the actual experiment screenshots in this repository are from Oracle VirtualBox. This README documents the environment actually used for the experiment.
 
 ---
 
@@ -214,7 +212,6 @@ The Type-2 virtual machine was configured to provide a comparable environment to
 | CPU | 2 vCPU |
 | Memory | 2 GB |
 | Disk | 20 GB |
-| Network | **[ENTER ACTUAL CONFIGURATION]** |
 
 ---
 
@@ -307,17 +304,16 @@ The following measurements were recorded:
 |---|---|
 | Hypervisor | Oracle VirtualBox |
 | Hypervisor Type | Type-2 |
-| Guest Operating System | Ubuntu |
-| CPU Allocation | 2 vCPU |
-| Memory Allocation | 2 GB |
-| Disk Allocation | 20 GB |
-| Total Execution Time | **[ENTER ACTUAL VALUE]** |
-| Total Events | **[ENTER ACTUAL VALUE]** |
-| Events per Second | **[ENTER ACTUAL VALUE]** |
-| Minimum Latency | **[ENTER ACTUAL VALUE]** |
-| Average Latency | **[ENTER ACTUAL VALUE]** |
-| Maximum Latency | **[ENTER ACTUAL VALUE]** |
-
+| Guest Operating System | Ubuntu 24.04 |
+| CPU Allocation | 4 vCPU |
+| Memory Allocation | Approximately 4 GB |
+| Disk Allocation | 30 GB |
+| Total Execution Time | 10.0015 s |
+| Total Events | 14,088 |
+| Events per Second | 1,408.44 |
+| Minimum Latency | 0.68 ms |
+| Average Latency | 0.71 ms |
+| Maximum Latency | 2.33 ms |
 ---
 
 # Performance Comparison
@@ -328,27 +324,29 @@ Both environments were configured with comparable virtual machine resources.
 
 ---
 
-## Comparison Table
+### Comparison Table
 
 | Performance Metric | Type-1 — Proxmox VE | Type-2 — Oracle VirtualBox |
 |---|---:|---:|
 | Hypervisor Type | Type-1 | Type-2 |
-| CPU Allocation | 2 vCPU | 2 vCPU |
-| Memory Allocation | 2 GB | 2 GB |
-| Disk Allocation | 20 GB | 20 GB |
-| Total Execution Time | **[VALUE]** | **[VALUE]** |
-| Total Events | **[VALUE]** | **[VALUE]** |
-| Events per Second | **[VALUE]** | **[VALUE]** |
-| Minimum Latency | **[VALUE]** | **[VALUE]** |
-| Average Latency | **[VALUE]** | **[VALUE]** |
-| Maximum Latency | **[VALUE]** | **[VALUE]** |
+| Guest Operating System | Ubuntu | Ubuntu 24.04 |
+| CPU Allocation | 2 vCPU | 4 vCPU |
+| Memory Allocation | 2 GB | Approximately 4 GB |
+| Disk Allocation | 20 GB | 30 GB |
+| Total Execution Time | 10.0004 s | 10.0015 s |
+| Total Events | 17,257 | 14,088 |
+| Events per Second | 1,725.49 | 1,408.44 |
+| Minimum Latency | 0.57 ms | 0.68 ms |
+| Average Latency | 0.58 ms | 0.71 ms |
+| Maximum Latency | 1.68 ms | 2.33 ms |
 
 ### Interpretation
 
-The table presents the actual benchmark measurements obtained from both hypervisor environments.
+The Sysbench CPU benchmark was executed for approximately 10 seconds in both environments.
 
-The measurements should be interpreted using the same workload and configuration conditions. No performance conclusion should be made from the hypervisor type alone; the recorded benchmark results are used as the basis for the comparison.
+The recorded measurements include total execution time, total events, events per second, and CPU latency values.
 
+The Type-1 and Type-2 experiments used different virtual hardware allocations, as recorded in their respective setups. Therefore, the results represent the observed performance of the two experimental configurations and should not be interpreted as a controlled comparison of hypervisor type alone.
 ---
 
 # Comparison Graph
