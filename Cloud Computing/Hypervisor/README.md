@@ -388,4 +388,4 @@ The final comparison is based on the actual benchmark results collected during t
 
 # Author
 
-**Name:** [Sneha Shettar]
+**Name:** Sneha Shettar
