@@ -1,0 +1,13 @@
+Network benchmark: iperf3
+Duration: 30 seconds
+
+VM:
+Throughput: 52.8 Gbits/sec
+Retransmissions: 36
+
+Container:
+Throughput: 49.7 Gbits/sec
+Retransmissions: 9336
+
+Note:
+This was a local VM/host-gateway networking measurement, not an external physical network-link test.

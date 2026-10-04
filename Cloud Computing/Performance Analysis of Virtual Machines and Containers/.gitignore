@@ -1,0 +1,14 @@
+# Python virtual environment
+api/venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Local benchmark/test files
+fio-test/
+
+# OS/editor files
+.DS_Store
+*.swp
+*~

@@ -1,0 +1,17 @@
+Metric,Environment,Result
+CPU,VM,5287.98 events/sec
+CPU,Container,5020.43 events/sec
+Memory,VM,97574.36 MiB/sec
+Memory,Container,80169.43 MiB/sec
+Disk Sequential Read,VM,1043 MiB/s
+Disk Sequential Read,Container,1178 MiB/s
+Disk Sequential Write,VM,1159 MiB/s
+Disk Sequential Write,Container,1550 MiB/s
+Disk Random Read,VM,28.9 MiB/s
+Disk Random Read,Container,30.2 MiB/s
+Disk Random Write,VM,31.8 MiB/s
+Disk Random Write,Container,39.7 MiB/s
+Network,VM,52.8 Gbits/sec
+Network,Container,49.7 Gbits/sec
+API Health,VM,1871.51 req/sec
+API Health,Container,1628.19 req/sec

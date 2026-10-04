@@ -1,0 +1,9 @@
+Metric,VM,Container,Container_vs_VM_Percent
+CPU,5287.98,5020.43,-5.06
+Memory,97574.36,80169.43,-17.84
+Sequential Read,1043,1178,12.94
+Sequential Write,1159,1550,33.74
+Random Read,28.9,30.2,4.50
+Random Write,31.8,39.7,24.84
+Network,52.8,49.7,-5.87
+API Health,1871.51,1628.19,-13.00

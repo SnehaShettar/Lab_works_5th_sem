@@ -1,0 +1,2 @@
+Container launch time: 0.187 s
+Application health response: 0.023 s
