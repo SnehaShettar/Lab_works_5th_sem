@@ -12,28 +12,28 @@ The application is divided into three independent microservices:
 
 Each microservice is independently developed and exposed through REST APIs. The services are containerized using Docker and deployed together using Docker Compose.
 
-**Tech stack:** Python, FastAPI, Docker, Docker Compose
+**Tech stack:** Python, FastAPI, httpx, Docker, Docker Compose
 
 ---
 
 ## Architecture
 
-The system consists of three independent microservices:
-
 ```text
-                  Library Management System
-                           |
-          +----------------+----------------+
-          |                |                |
-          v                v                v
-   +-------------+  +---------------+  +-------------+
-   | Book Service|  | Member Service|  | Loan Service|
-   |   :8001     |  |    :8002      |  |    :8003    |
-   +-------------+  +---------------+  +-------------+
-          ^                ^                |
-          |                |                |
-          +----------------+----------------+
-                  Inter-Service Communication
+                        Client
+                          |
+                          v
+                 +-----------------+
+                 |  Loan Service   |
+                 |     :8003       |
+                 +-----------------+
+                   |             |
+                   v             v
+         +---------------+  +----------------+
+         | Book Service  |  | Member Service |
+         |    :8001      |  |     :8002      |
+         +---------------+  +----------------+
+
+      All three containers run on the Docker network "library_net"
 ```
 
 ### Microservices
@@ -55,19 +55,21 @@ The **Book Service** is responsible for managing library books and their availab
 - Store and provide book details.
 - Retrieve the list of books along with their availability.
 - Retrieve details of a specific book.
-- Update book availability when a book is borrowed or returned.
+- Reserve a book when it is borrowed and release it when it is returned.
 
 ### REST Endpoints
 
 | Method | Endpoint | Description |
 |---|---|---|
+| GET | `/` | Check Book Service status |
+| GET | `/health` | Health check used by Docker Compose |
 | GET | `/books` | Retrieve all books |
 | GET | `/books/{book_id}` | Retrieve a specific book |
-| **[FILL IN]** | **[FILL IN]** | Update book availability (called by the Loan Service on borrow and return) |
+| POST | `/books/{book_id}/reserve` | Mark a book as borrowed (returns 409 if it is already borrowed) |
+| POST | `/books/{book_id}/release` | Mark a book as available again |
+| PUT | `/books/{book_id}/availability?available=true/false` | Set availability manually |
 
 ### Port
-
-The Book Service runs on:
 
 ```text
 http://localhost:8001
@@ -90,12 +92,12 @@ The **Member Service** is responsible for managing library member information.
 
 | Method | Endpoint | Description |
 |---|---|---|
+| GET | `/` | Check Member Service status |
+| GET | `/health` | Health check used by Docker Compose |
 | GET | `/members` | Retrieve all members |
 | GET | `/members/{member_id}` | Retrieve a specific member |
 
 ### Port
-
-The Member Service runs on:
 
 ```text
 http://localhost:8002
@@ -112,7 +114,7 @@ The **Loan Service** is responsible for managing the borrowing and returning of 
 - Borrow books for registered library members.
 - Return borrowed books.
 - Maintain loan details and loan status.
-- Communicate with the Book Service to verify book availability.
+- Communicate with the Book Service to verify and reserve books.
 - Communicate with the Member Service to verify member details.
 
 ### REST Endpoints
@@ -120,13 +122,13 @@ The **Loan Service** is responsible for managing the borrowing and returning of 
 | Method | Endpoint | Description |
 |---|---|---|
 | GET | `/` | Check Loan Service status |
+| GET | `/health` | Health check used by Docker Compose |
 | GET | `/loans` | Retrieve all loan records |
+| GET | `/loans/check/{book_id}/{member_id}` | Check whether a member can borrow a book (read-only, calls both services) |
 | POST | `/loans/borrow` | Borrow a book |
 | POST | `/loans/return/{loan_id}` | Return a borrowed book |
 
 ### Port
-
-The Loan Service runs on:
 
 ```text
 http://localhost:8003
@@ -141,10 +143,10 @@ The **Loan Service** communicates with the **Book Service** and **Member Service
 When a member requests to borrow a book:
 
 1. The Loan Service receives the borrow request.
-2. It communicates with the **Book Service** to verify the book and its availability.
-3. It communicates with the **Member Service** to verify the member details.
-4. If both are valid, the Loan Service creates the loan record.
-5. The book availability is updated after the successful borrowing operation.
+2. It calls the **Book Service** and the **Member Service** at the same time to verify the book and the member.
+3. If the member is active, it asks the Book Service to **reserve** the book.
+4. The Book Service reserves the book only if it is still available, so two members cannot borrow the same book at the same moment.
+5. The Loan Service creates the loan record and returns it to the client.
 
 ### Docker Service Communication
 
@@ -165,7 +167,21 @@ BOOK_SERVICE_URL=http://book_service:8001
 MEMBER_SERVICE_URL=http://member_service:8002
 ```
 
-This allows the three microservices to communicate with each other through the Docker Compose network.
+All three services are connected to the same Docker network, `library_net`, created by Docker Compose.
+
+---
+
+## Optimisations
+
+| Optimisation | Before | After |
+|---|---|---|
+| HTTP connections | A new HTTP client was created for every call (3 per borrow) | One shared HTTP client; connections are reused |
+| Book and Member checks | Called one after the other | Called in parallel with `asyncio.gather` |
+| Double borrowing | 16 simultaneous borrows of the same book created 16 loans | Atomic `reserve` in Book Service; only 1 of 16 succeeds |
+| Data lookups | Linear search through a list | Dictionary lookup by id |
+| Error handling | Unexpected responses from other services could crash the Loan Service | Clean 400 / 404 / 502 / 503 errors |
+| Startup order | `depends_on` only controlled start order | Health checks; Loan Service starts only after the other two are healthy |
+| Builds | Unpinned dependency versions | Pinned versions for repeatable builds |
 
 ---
 
@@ -175,73 +191,76 @@ Each microservice is containerized using Docker. A separate Dockerfile is provid
 
 ### Docker Images
 
-The following Docker images are created for the application:
-
-| Service | Docker Image | Port |
-|---|---|---:|
-| Book Service | `library-book-service:latest` | 8001 |
-| Member Service | `library-member-service:latest` | 8002 |
-| Loan Service | `library-loan-service:latest` | 8003 |
+| Service | Docker Image | Container Name | Port |
+|---|---|---|---:|
+| Book Service | `library-book-service:latest` | `book_service` | 8001 |
+| Member Service | `library-member-service:latest` | `member_service` | 8002 |
+| Loan Service | `library-loan-service:latest` | `loan_service` | 8003 |
 
 ### Docker Compose
 
-Docker Compose is used to build and run all three microservices together.
-
-The services are configured in the `docker-compose.yml` file. Each service has a `build` path (the folder containing its Dockerfile) and an `image` name (the tag given to the built image).
+Docker Compose is used to build and run all three microservices together. Each service has a `build` path, an `image` name, a health check, and is connected to the `library_net` network.
 
 ```yaml
+name: library-management
+
 services:
 
   book_service:
     build: ./book_service
     image: library-book-service:latest
+    container_name: book_service
     ports:
       - "8001:8001"
+    networks:
+      - library_net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   member_service:
     build: ./member_service
     image: library-member-service:latest
+    container_name: member_service
     ports:
       - "8002:8002"
+    networks:
+      - library_net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   loan_service:
     build: ./loan_service
     image: library-loan-service:latest
+    container_name: loan_service
     ports:
       - "8003:8003"
     environment:
       BOOK_SERVICE_URL: http://book_service:8001
       MEMBER_SERVICE_URL: http://member_service:8002
+    networks:
+      - library_net
     depends_on:
-      - book_service
-      - member_service
+      book_service:
+        condition: service_healthy
+      member_service:
+        condition: service_healthy
+
+networks:
+  library_net:
+    driver: bridge
 ```
-
-### Running the Services
-
-The complete application can be built and started using:
-
-```bash
-docker compose up -d --build
-```
-
-The running containers can be checked using:
-
-```bash
-docker ps
-```
-
-All three microservices run as separate Docker containers and communicate through the Docker Compose network.
 
 ---
 
 ## API Testing and End-to-End Communication
 
-The microservices were tested using REST API requests to verify that the services are working correctly.
-
 ### Book Service
-
-The Book Service was tested using:
 
 ```text
 GET http://localhost:8001/books
@@ -249,15 +268,11 @@ GET http://localhost:8001/books
 
 ### Member Service
 
-The Member Service was tested using:
-
 ```text
 GET http://localhost:8002/members
 ```
 
 ### Loan Service
-
-The Loan Service was tested using:
 
 ```text
 POST http://localhost:8003/loans/borrow
@@ -285,8 +300,6 @@ The borrow request returned a successful response with:
 
 ### Book Return
 
-The borrowed book was returned using:
-
 ```text
 POST http://localhost:8003/loans/return/1
 ```
@@ -305,9 +318,10 @@ A total of **5 workload levels** were tested with concurrency levels of **1, 2, 
 
 - Requests per workload: **200** (5 workloads x 200 = 1000 requests in total)
 - Concurrency levels: 1, 2, 4, 8, 16
-- Endpoint under load: **[FILL IN]**
-- CPU and memory measured on: **[FILL IN - which container(s)]**
+- Endpoint under load: **`GET http://127.0.0.1:8001/books`** (Book Service)
+- CPU and memory measured on: **all three containers** using `docker stats`. The table shows the average of the three; per-container values are in `Performance/performance_results.csv`.
 - Load test script: `Performance/load_test.py`
+- These measurements were taken before the optimisations listed above.
 
 ### Workload Results
 
@@ -318,6 +332,16 @@ A total of **5 workload levels** were tested with concurrency levels of **1, 2, 
 | W3 | 4 | 8.37 | 54.05 | 200 | 0 | 0.20 | 35.35 |
 | W4 | 8 | 9.71 | 48.12 | 200 | 0 | 0.25 | 35.41 |
 | W5 | 16 | 15.31 | 47.97 | 200 | 0 | 0.26 | 35.51 |
+
+### CPU and Memory per Microservice
+
+| Workload | Book CPU (%) | Member CPU (%) | Loan CPU (%) | Book Memory (MB) | Member Memory (MB) | Loan Memory (MB) |
+|---|---:|---:|---:|---:|---:|---:|
+| W1 | 5.31 | 0.20 | 0.21 | 35.76 | 34.56 | 35.49 |
+| W2 | 1.56 | 0.21 | 0.24 | 35.81 | 34.56 | 35.49 |
+| W3 | 0.20 | 0.20 | 0.21 | 35.99 | 34.56 | 35.49 |
+| W4 | 0.27 | 0.24 | 0.23 | 36.19 | 34.56 | 35.49 |
+| W5 | 0.27 | 0.26 | 0.24 | 36.47 | 34.56 | 35.49 |
 
 ### Performance Summary
 
@@ -330,8 +354,6 @@ A total of **5 workload levels** were tested with concurrency levels of **1, 2, 
 - CPU utilization remained low during the tests.
 
 ### Performance Graphs
-
-The following graphs were generated from the workload test results.
 
 #### Concurrent Requests vs Average Response Time
 
@@ -353,6 +375,17 @@ The detailed performance results are available in:
 
 `Performance/performance_results.csv`
 
+### End-to-End Load Test for the Optimised Version
+
+`load_test.py` (in the project folder) tests the full path Client → Loan → Book + Member using `GET /loans/check/1/1`, for 20 seconds at each concurrency level, and samples `docker stats` for all three containers:
+
+```bash
+pip install httpx matplotlib
+python load_test.py
+```
+
+It produces `results.md` (observation table), `results.csv` and four graphs (`graph_response_time.png`, `graph_throughput.png`, `graph_cpu.png`, `graph_memory.png`).
+
 ---
 
 ## Performance Analysis
@@ -364,8 +397,18 @@ The workload testing results show that the system handled all tested concurrency
 - All **1000 requests** were completed successfully with **0 failures**.
 - Average response time fell from 12.40 ms at concurrency 1 to its lowest value of **8.37 ms** at concurrency 4, then rose to 9.71 ms at concurrency 8 and **15.31 ms** at concurrency 16.
 - Throughput peaked at **54.05 requests/second** at concurrency 4 and was about 48 requests/second at concurrency 2, 8 and 16, so adding concurrency beyond 4 did not improve throughput.
-- CPU utilization remained low in every workload (at most 1.91%).
+- CPU utilization remained low in every workload (at most 1.91% on average).
 - Memory utilization remained nearly stable at approximately **35 MB** (35.27 MB to 35.51 MB).
+
+### Which Microservice Consumes More Resources
+
+- The **Book Service** used the most resources: its CPU reached **5.31%** at W1, while Member and Loan stayed around 0.2%. Its memory also grew slightly, from 35.76 MB to **36.47 MB**, while the other two stayed constant.
+- This is expected, because the load test sent every request directly to the Book Service (`GET /books`). The Member and Loan services were idle during this test.
+
+### Performance Degradation
+
+- Beyond concurrency 4, response time increased (to 15.31 ms at concurrency 16) while throughput stopped increasing. Each service runs a single Uvicorn worker, so extra concurrent requests wait in a queue instead of being processed faster.
+- No requests failed at any workload level, so the services were not overloaded at 16 concurrent requests.
 
 ### Performance Conclusion
 
@@ -374,8 +417,6 @@ All five workloads completed with 100% request success. In these tests, concurre
 ---
 
 ## Screenshots
-
-The following screenshots provide evidence of the Docker deployment, running containers, inter-service communication, and successful API operations.
 
 ### Docker Images and Containers
 
@@ -397,8 +438,6 @@ The following screenshots provide evidence of the Docker deployment, running con
 
 ## Project Structure
 
-The project is organized as follows:
-
 ```text
 01 - Microservice_Library_Management/
 │
@@ -419,6 +458,7 @@ The project is organized as follows:
 │
 ├── Performance/
 │   ├── load_test.py
+│   ├── generate_graphs.py
 │   ├── performance_results.csv
 │   ├── performance_observation_table.csv
 │   ├── response_time.png
@@ -440,6 +480,7 @@ The project is organized as follows:
 │   └── 11_book_available_after_return.png
 │
 ├── docker-compose.yml
+├── load_test.py
 └── README.md
 ```
 
@@ -453,8 +494,6 @@ Docker with Docker Compose v2 (the `docker compose` command) installed and runni
 
 ### Step 1: Build and Start the Docker Services
 
-Open a terminal in the project directory and run:
-
 ```bash
 docker compose up -d --build
 ```
@@ -465,19 +504,26 @@ docker compose up -d --build
 docker ps
 ```
 
-You should see three containers, one for each service (`book_service`, `member_service`, `loan_service`), with status `Up`. Docker Compose adds the project name as a prefix to the container names.
+You should see three containers named `book_service`, `member_service` and `loan_service`, with status `Up (healthy)`.
 
-### Step 3: Test the Services
+### Step 3: Check the Network
+
+```bash
+docker network inspect library-management_library_net
+```
+
+All three containers should be listed under `Containers`.
+
+### Step 4: Test the Services
 
 ```text
 Book Service:    GET http://localhost:8001/books
 Member Service:  GET http://localhost:8002/members
 Loan Service:    GET http://localhost:8003/
+End-to-end:      GET http://localhost:8003/loans/check/1/1
 ```
 
-### Step 4: Stop the Services
-
-To stop the application:
+### Step 5: Stop the Services
 
 ```bash
 docker compose down
@@ -493,9 +539,10 @@ The project demonstrates:
 
 - Independent REST APIs for each microservice.
 - Dockerization of all three microservices.
-- Deployment using Docker Compose.
+- Deployment using Docker Compose with health checks on a dedicated network.
 - Inter-service communication using Docker service names.
 - Successful book borrowing and returning operations.
+- Optimised inter-service calls (shared connections, parallel requests, atomic reservation).
 - Successful execution of workload testing at five different concurrency levels.
 - Performance monitoring of response time, throughput, CPU utilization, and memory utilization.
 
@@ -515,7 +562,8 @@ The system achieved **100% request success** during the performance testing, dem
 ## Author
 
 **Sneha Shettar**
-
+**Bhoomi Bankapur**
+**Sanket U**
 5th Semester – Cloud Computing Lab
 
-[KLE TECHNOLGICAL UNIVERSITY]
+KLE Technological University

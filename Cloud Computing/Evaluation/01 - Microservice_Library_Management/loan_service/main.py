@@ -1,27 +1,31 @@
+import asyncio
 import os
-import httpx
+from contextlib import asynccontextmanager
 
+import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-
-app = FastAPI(title="Library Loan Service")
-
-
-# These defaults are for local testing.
-# Docker Compose will replace them with service names later.
-BOOK_SERVICE_URL = os.getenv(
-    "BOOK_SERVICE_URL",
-    "http://127.0.0.1:8001"
-)
-
-MEMBER_SERVICE_URL = os.getenv(
-    "MEMBER_SERVICE_URL",
-    "http://127.0.0.1:8002"
-)
+# Local defaults; Docker Compose overrides these with the service names
+BOOK_SERVICE_URL = os.getenv("BOOK_SERVICE_URL", "http://127.0.0.1:8001")
+MEMBER_SERVICE_URL = os.getenv("MEMBER_SERVICE_URL", "http://127.0.0.1:8002")
 
 
-loans = []
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # ONE shared HTTP client for the whole app: connections to the other
+    # services are kept open and reused instead of opened for every request.
+    app.state.client = httpx.AsyncClient(
+        timeout=httpx.Timeout(5.0),
+        limits=httpx.Limits(max_connections=100, max_keepalive_connections=50),
+    )
+    yield
+    await app.state.client.aclose()
+
+
+app = FastAPI(title="Library Loan Service", lifespan=lifespan)
+
+loans = {}  # loan_id -> loan
 
 
 class BorrowRequest(BaseModel):
@@ -29,159 +33,101 @@ class BorrowRequest(BaseModel):
     member_id: int
 
 
+async def call_service(method: str, url: str, service_name: str, not_found: str):
+    """Call another microservice and turn its errors into clean HTTP errors."""
+    try:
+        response = await app.state.client.request(method, url)
+    except httpx.RequestError:
+        raise HTTPException(status_code=503, detail=f"{service_name} unavailable")
+
+    if response.status_code == 404:
+        raise HTTPException(status_code=404, detail=not_found)
+    if response.status_code == 409:
+        raise HTTPException(status_code=400, detail="Book is not available")
+    if response.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"{service_name} returned an error")
+    return response.json()
+
+
+async def get_book_and_member(book_id: int, member_id: int):
+    # Book Service and Member Service are called IN PARALLEL, not one after the other
+    return await asyncio.gather(
+        call_service("GET", f"{BOOK_SERVICE_URL}/books/{book_id}",
+                     "Book Service", "Book not found"),
+        call_service("GET", f"{MEMBER_SERVICE_URL}/members/{member_id}",
+                     "Member Service", "Member not found"),
+    )
+
+
 @app.get("/")
-def home():
-    return {
-        "service": "Loan Service",
-        "status": "running"
-    }
+async def home():
+    return {"service": "Loan Service", "status": "running"}
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
 
 
 @app.get("/loans")
-def get_loans():
-    return loans
+async def get_loans():
+    return list(loans.values())
+
+
+# Read-only end-to-end request (Client -> Loan -> Book + Member).
+# It changes nothing, so it is the endpoint to use for load testing.
+@app.get("/loans/check/{book_id}/{member_id}")
+async def check_eligibility(book_id: int, member_id: int):
+    book, member = await get_book_and_member(book_id, member_id)
+    return {
+        "book_title": book["title"],
+        "book_available": book["available"],
+        "member_name": member["name"],
+        "member_active": member["active"],
+        "can_borrow": book["available"] and member["active"],
+    }
 
 
 @app.post("/loans/borrow")
 async def borrow_book(request: BorrowRequest):
-
-    # Check whether the book exists and is available
-    try:
-        async with httpx.AsyncClient() as client:
-            book_response = await client.get(
-                f"{BOOK_SERVICE_URL}/books/{request.book_id}"
-            )
-
-        if book_response.status_code == 404:
-            raise HTTPException(
-                status_code=404,
-                detail="Book not found"
-            )
-
-        book = book_response.json()
-
-    except httpx.RequestError:
-        raise HTTPException(
-            status_code=503,
-            detail="Book Service unavailable"
-        )
-
-    if not book["available"]:
-        raise HTTPException(
-            status_code=400,
-            detail="Book is not available"
-        )
-
-    # Check whether the member exists and is active
-    try:
-        async with httpx.AsyncClient() as client:
-            member_response = await client.get(
-                f"{MEMBER_SERVICE_URL}/members/{request.member_id}"
-            )
-
-        if member_response.status_code == 404:
-            raise HTTPException(
-                status_code=404,
-                detail="Member not found"
-            )
-
-        member = member_response.json()
-
-    except httpx.RequestError:
-        raise HTTPException(
-            status_code=503,
-            detail="Member Service unavailable"
-        )
+    book, member = await get_book_and_member(request.book_id, request.member_id)
 
     if not member["active"]:
-        raise HTTPException(
-            status_code=400,
-            detail="Member is not active"
-        )
+        raise HTTPException(status_code=400, detail="Member is not active")
 
-    # Mark the book as unavailable
-    try:
-        async with httpx.AsyncClient() as client:
-            availability_response = await client.put(
-                f"{BOOK_SERVICE_URL}/books/{request.book_id}/availability",
-                params={"available": False}
-            )
+    # Atomic reserve in Book Service: fails with "not available" if someone
+    # else borrowed the book in the meantime (no double borrowing).
+    await call_service("POST", f"{BOOK_SERVICE_URL}/books/{request.book_id}/reserve",
+                       "Book Service", "Book not found")
 
-        if availability_response.status_code != 200:
-            raise HTTPException(
-                status_code=500,
-                detail="Could not update book availability"
-            )
-
-    except httpx.RequestError:
-        raise HTTPException(
-            status_code=503,
-            detail="Book Service unavailable"
-        )
-
-    # Create the loan
+    loan_id = len(loans) + 1
     loan = {
-        "loan_id": len(loans) + 1,
+        "loan_id": loan_id,
         "book_id": request.book_id,
         "book_title": book["title"],
         "member_id": request.member_id,
         "member_name": member["name"],
-        "status": "borrowed"
+        "status": "borrowed",
     }
-
-    loans.append(loan)
-
-    return {
-        "message": "Book borrowed successfully",
-        "loan": loan
-    }
+    loans[loan_id] = loan
+    return {"message": "Book borrowed successfully", "loan": loan}
 
 
 @app.post("/loans/return/{loan_id}")
 async def return_book(loan_id: int):
-
-    loan = None
-
-    for item in loans:
-        if item["loan_id"] == loan_id:
-            loan = item
-            break
-
+    loan = loans.get(loan_id)
     if loan is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Loan not found"
-        )
-
+        raise HTTPException(status_code=404, detail="Loan not found")
     if loan["status"] == "returned":
-        raise HTTPException(
-            status_code=400,
-            detail="Book already returned"
-        )
+        raise HTTPException(status_code=400, detail="Book already returned")
 
-    # Mark the book as available again
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.put(
-                f"{BOOK_SERVICE_URL}/books/{loan['book_id']}/availability",
-                params={"available": True}
-            )
-
-        if response.status_code != 200:
-            raise HTTPException(
-                status_code=500,
-                detail="Could not update book availability"
-            )
-
-    except httpx.RequestError:
-        raise HTTPException(
-            status_code=503,
-            detail="Book Service unavailable"
-        )
-
+    # Mark first so two simultaneous returns of the same loan can't both run
     loan["status"] = "returned"
+    try:
+        await call_service("POST", f"{BOOK_SERVICE_URL}/books/{loan['book_id']}/release",
+                           "Book Service", "Book not found")
+    except HTTPException:
+        loan["status"] = "borrowed"  # undo if Book Service failed
+        raise
 
-    return {
-        "message": "Book returned successfully",
-        "loan": loan
-    }
+    return {"message": "Book returned successfully", "loan": loan}
