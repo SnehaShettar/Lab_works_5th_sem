@@ -1,0 +1,22 @@
+services:
+
+  book_service:
+    image: library-book-service:latest
+    ports:
+      - "8001:8001"
+
+  member_service:
+    image: library-member-service:latest
+    ports:
+      - "8002:8002"
+
+  loan_service:
+    image: library-loan-service:latest
+    ports:
+      - "8003:8003"
+    environment:
+      BOOK_SERVICE_URL: http://book_service:8001
+      MEMBER_SERVICE_URL: http://member_service:8002
+    depends_on:
+      - book_service
+      - member_service
